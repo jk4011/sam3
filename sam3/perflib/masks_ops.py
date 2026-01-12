@@ -58,12 +58,22 @@ def mask_iou(pred_masks: torch.Tensor, gt_masks: torch.Tensor) -> torch.Tensor:
     N, H, W = pred_masks.shape
     M, _, _ = gt_masks.shape
 
-    # Flatten masks: (N, 1, H*W) and (1, M, H*W)
-    pred_flat = pred_masks.view(N, 1, H * W)
-    gt_flat = gt_masks.view(1, M, H * W)
+    # Use batched processing to avoid CUDA memory overflow for large N or M
+    # Process in chunks to limit memory usage
+    batch_size = 16  # Process 16 masks at a time
+    ious = torch.zeros(N, M, device=pred_masks.device, dtype=torch.float)
 
-    # Compute intersection and union: (N, M)
-    intersection = (pred_flat & gt_flat).sum(dim=2).float()
-    union = (pred_flat | gt_flat).sum(dim=2).float()
-    ious = intersection / union.clamp(min=1)
+    for i in range(0, N, batch_size):
+        end_i = min(i + batch_size, N)
+        pred_batch = pred_masks[i:end_i].view(end_i - i, 1, H * W)
+
+        for j in range(0, M, batch_size):
+            end_j = min(j + batch_size, M)
+            gt_batch = gt_masks[j:end_j].view(1, end_j - j, H * W)
+
+            # Compute intersection and union for this batch
+            intersection = (pred_batch & gt_batch).sum(dim=2).float()
+            union = (pred_batch | gt_batch).sum(dim=2).float()
+            ious[i:end_i, j:end_j] = intersection / union.clamp(min=1)
+
     return ious  # shape: (N, M)
